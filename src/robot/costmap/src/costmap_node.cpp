@@ -33,9 +33,10 @@ void CostmapNode::inflateCostmap() {
               double distance = std::sqrt(dx * dx + dy * dy) * resolution_;
 
               if (distance <= inflation_radius_) {
-                int cost = static_cast<int>(max_cost_ * (1.0 - distance/inflation_radius_));
-
-                grid_[new_x][new_y] = std::max(grid_[new_x][new_y], cost);
+                int cost = static_cast<int>(max_cost_ * (1.0 - distance / inflation_radius_));
+                if (cost > 10) {
+                  grid_[new_x][new_y] = std::max(grid_[new_x][new_y], cost);
+                }
               }
             }
           }
@@ -90,6 +91,12 @@ void CostmapNode::inflateCostmap() {
 //}
 
 void CostmapNode::lidarSubscriber(const sensor_msgs::msg::LaserScan::SharedPtr scan) {
+  for (int i = 0; i < GRID_SIZE_; i++) {
+    for (int j = 0; j < GRID_SIZE_; j++) {
+      grid_[i][j] = 0;
+    }
+  }
+
   float angleMinRadians = scan->angle_min;
   float angleMaxRadians = scan->angle_max;
   float angleIncrementRadians = scan->angle_increment;
@@ -118,21 +125,16 @@ void CostmapNode::lidarSubscriber(const sensor_msgs::msg::LaserScan::SharedPtr s
 
   auto msg = nav_msgs::msg::OccupancyGrid();
   msg.header = scan->header;
-  msg.info.width = 300;
-  msg.info.height = 300;
+  msg.info.width = GRID_SIZE_;
+  msg.info.height = GRID_SIZE_;
   msg.info.resolution = resolution_;
-  msg.info.origin.position.x = -15;
-  msg.info.origin.position.y = -15;
-
-  msg.info.origin.orientation.x = 0.0;
-  msg.info.origin.orientation.y = 0.0;
-  msg.info.origin.orientation.z = 0.0;
-  msg.info.origin.orientation.w = 1.0;
+  msg.info.origin.position.x = -1 * (GRID_SIZE_ / 2) * resolution_;
+  msg.info.origin.position.y = -1 * (GRID_SIZE_ / 2) * resolution_;
 
   msg.data.resize(300 * 300);
   for (int i = 0; i < 300; i++) {
     for (int j = 0; j < 300; j++) {
-      msg.data[i * 300 + j] = grid_[i][j];
+      msg.data[j * 300 + i] = grid_[i][j];
     }
   }
   costmap_pub_->publish(msg);
