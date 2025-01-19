@@ -39,3 +39,6 @@
 ## Platform in which to build the docker images with. 
 ## Either arm64 (apple silicon, raspberry pi) or amd64 (most computers)
 # PLATFORM="amd64"
+
+ACTIVE_MODULES="robot gazebo vis_tools"
+PLATFORM="arm64"
