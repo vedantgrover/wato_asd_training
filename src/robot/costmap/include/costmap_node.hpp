@@ -28,7 +28,7 @@ class CostmapNode : public rclcpp::Node {
     static const int GRID_SIZE_ = 300;
     const float resolution_ = 0.1;
     const int max_cost_ = 100;
-    const float inflation_radius_ = 1.6;
+    const float inflation_radius_ = 1.5;
 
     int grid_[GRID_SIZE_][GRID_SIZE_] = {0};
 

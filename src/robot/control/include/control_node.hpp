@@ -36,7 +36,7 @@ class ControlNode : public rclcpp::Node {
 
     double lookahead_distance_ = 1.0;
     double goal_tolerance_ = 0.1;
-    double linear_speed_ = 0.5;
+    double linear_speed_ = 1.0;
 };
 
 #endif
