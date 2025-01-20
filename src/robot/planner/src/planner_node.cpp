@@ -62,7 +62,7 @@ void PlannerNode::planPath() {
 
     nav_msgs::msg::Path path;
     path.header.stamp = this->get_clock()->now();
-    path.header.frame_id = "map";
+    path.header.frame_id = "sim_world";
 
     // Convert start and goal positions to grid coordinates
     CellIndex start = worldToGrid(robot_pose_.position.x, robot_pose_.position.y);
@@ -119,7 +119,7 @@ bool PlannerNode::isValidCell(const CellIndex& idx) {
   }
 
   int cell_index = idx.y * current_map_.info.width + idx.x;
-  return current_map_.data[cell_index] < 50;
+  return current_map_.data[cell_index] < 25;
 }
 
 double PlannerNode::heuristic(const CellIndex& a, const CellIndex& b) {

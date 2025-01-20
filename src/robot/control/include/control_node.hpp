@@ -34,9 +34,9 @@ class ControlNode : public rclcpp::Node {
     nav_msgs::msg::Path::SharedPtr current_path_;
     nav_msgs::msg::Odometry::SharedPtr robot_odom_;
 
-    double lookahead_distance_ = 1.0;
-    double goal_tolerance_ = 0.1;
-    double linear_speed_ = 0.5;
+    double lookahead_distance_ = 0.5;
+    double goal_tolerance_ = 0.05;
+    double linear_speed_ = 1.0;
 };
 
 #endif
