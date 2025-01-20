@@ -160,7 +160,7 @@ std::vector<geometry_msgs::msg::PoseStamped> PlannerNode::reconstructPath(
     std::vector<geometry_msgs::msg::PoseStamped> path;
     for (auto it = path_indices.rbegin(); it != path_indices.rend(); ++it) {
         geometry_msgs::msg::PoseStamped pose;
-        pose.header.frame_id = "map";
+        pose.header.frame_id = "sim_world";
         pose.header.stamp = this->get_clock()->now();
 
         // Convert grid coordinates to world coordinates

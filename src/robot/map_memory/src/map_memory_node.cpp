@@ -12,7 +12,13 @@ MapMemoryNode::MapMemoryNode() : Node("map_memory"), map_memory_(robot::MapMemor
 
   global_map_.header.stamp = this->now();
   global_map_.header.frame_id = "sim_world";
-  global_map_.data.resize(300*300, 0);
+  global_map_.info.resolution = resolution_;
+  global_map_.info.width = GRID_SIZE_;
+  global_map_.info.height = GRID_SIZE_;
+  global_map_.info.origin.position.x = -1 * (GRID_SIZE_ * resolution_) / 2.0;  // Center the map on the field
+  global_map_.info.origin.position.y = -1 * (GRID_SIZE_ * resolution_) / 2.0;  // Center the map on the field
+  global_map_.info.origin.orientation.w = 1.0;
+  global_map_.data.resize(GRID_SIZE_ * GRID_SIZE_, 0);
   for (int i = 0; i < 300 * 300; i++) {
     global_map_.data[i] = 0;
   }
@@ -87,18 +93,43 @@ void MapMemoryNode::updateMap() {
 //}
 
 void MapMemoryNode::integrateCostMap() {
-  const int grid_size = 300;
-  for (int i = 0; i < grid_size; i++) {
-    for (int j = 0; j < grid_size; j++) {
-      if (global_map_.data[grid_size * i + j] == 0 && latest_costmap_.data[grid_size * i + j] > 0) {
-        global_map_.data[grid_size * i + j] = latest_costmap_.data[grid_size*i + j];
-      } else if (global_map_.data[grid_size * i + j] < latest_costmap_.data[grid_size*i + j]  && latest_costmap_.data[grid_size * i + j] > 50) {
-        global_map_.data[grid_size * i + j] = latest_costmap_.data[grid_size*i + j];
-      }
-      global_map_.data[grid_size * i + j] *= 0.92;
+    if (latest_costmap_.info.width == 0 || latest_costmap_.info.height == 0) {
+        return;
     }
-  }
+
+    for (int i = 0; i < GRID_SIZE_; i++) {
+        for (int j = 0; j < GRID_SIZE_; j++) {
+            int index = GRID_SIZE_ * i + j;
+            
+            if (global_map_.data[index] == 0 && latest_costmap_.data[index] > 0) {
+                global_map_.data[index] = latest_costmap_.data[index];
+            } else if (global_map_.data[index] < latest_costmap_.data[index] && 
+                      latest_costmap_.data[index] > 50) {
+                global_map_.data[index] = latest_costmap_.data[index];
+            }
+            
+            // Apply decay factor
+            global_map_.data[index] *= 0.92;
+        }
+    }
 }
+
+// void MapMemoryNode::integrateCostMap() {
+//   if (latest_costmap_.info.width == 0 || latest_costmap_.info.height == 0) {
+//     return;
+//   }
+
+//   for (int i = 0; i < GRID_SIZE_; i++) {
+//     for (int j = 0; j < GRID_SIZE_; j++) {
+//       if (global_map_.data[GRID_SIZE_ * i + j] == 0 && latest_costmap_.data[GRID_SIZE_ * i + j] > 0) {
+//         global_map_.data[GRID_SIZE_ * i + j] = latest_costmap_.data[GRID_SIZE_*i + j];
+//       } else if (global_map_.data[GRID_SIZE_ * i + j] < latest_costmap_.data[GRID_SIZE_*i + j]  && latest_costmap_.data[GRID_SIZE_ * i + j] > 50) {
+//         global_map_.data[GRID_SIZE_ * i + j] = latest_costmap_.data[GRID_SIZE_*i + j];
+//       }
+//       global_map_.data[GRID_SIZE_ * i + j] *= 0.92;
+//     }
+//   }
+// }
 
 int main(int argc, char ** argv)
 {

@@ -24,6 +24,11 @@ class MapMemoryNode : public rclcpp::Node {
     double last_x_, last_y_;
     const double distance_threshold_meters_ = 1.5;
     bool costmap_updated_ = false;
+    static const int GRID_SIZE_ = 300;
+    const float resolution_ = 0.1;
+
+    const float field_width_ = 30.0;
+    const float field_height_ = 30.0;
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
     void updateMap();
