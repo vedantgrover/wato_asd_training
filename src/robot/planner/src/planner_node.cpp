@@ -110,7 +110,12 @@ void PlannerNode::planPath() {
         }
 
         for (const CellIndex& neighbor : getNeighbors(current)) {
-            double tentative_g = g_score[current] + 1.0;  // Assuming cost of 1 between adjacent cells
+            // Get cell cost from map
+            int cell_index = neighbor.y * current_map_.info.width + neighbor.x;
+            double obstacle_cost = current_map_.data[cell_index] / 20.0;  // More aggressive obstacle avoidance
+            
+            // Higher cost near obstacles
+            double tentative_g = g_score[current] + 1.0 + obstacle_cost * 2.0;
 
             if (!g_score.count(neighbor) || tentative_g < g_score[neighbor]) {
                 came_from[neighbor] = current;
@@ -138,7 +143,8 @@ std::pair<double, double> PlannerNode::gridToWorld(int x, int y) {
 
 bool PlannerNode::isValidCell(const CellIndex& idx) {
   // Check bounds
-  if (idx.x < 0 || idx.x >= current_map_.info.width || idx.y < 0 || idx.y >= current_map_.info.height) {
+  if (idx.x < 0 || static_cast<uint32_t>(idx.x) >= current_map_.info.width ||
+      idx.y < 0 || static_cast<uint32_t>(idx.y) >= current_map_.info.height) {
     return false;
   }
 
@@ -146,38 +152,57 @@ bool PlannerNode::isValidCell(const CellIndex& idx) {
   int cell_index = idx.y * current_map_.info.width + idx.x;
   int cell_cost = current_map_.data[cell_index];
 
-  // More conservative threshold (was 30)
-  if (cell_cost > 20) {
+  // Direct obstacle check
+  if (cell_cost >= 90) {  // Definitely an obstacle
     return false;
   }
 
-  // Check surrounding cells for safety margin
-  const int safety_radius = 2;  // Check 2 cells in each direction
+  // Check for high-cost areas
+  if (cell_cost >= 50) {  // Likely obstacle or very close to one
+    return false;
+  }
+
+  // For path planning, we want to be more permissive to allow finding paths
+  // but still avoid dangerous areas
+  const int safety_radius = 1;  // Reduced from 2 to allow more path options
+  int high_cost_count = 0;
+
   for (int dx = -safety_radius; dx <= safety_radius; dx++) {
     for (int dy = -safety_radius; dy <= safety_radius; dy++) {
       int nx = idx.x + dx;
       int ny = idx.y + dy;
       
       // Skip if out of bounds
-      if (nx < 0 || nx >= current_map_.info.width || ny < 0 || ny >= current_map_.info.height) {
+      if (nx < 0 || static_cast<uint32_t>(nx) >= current_map_.info.width ||
+          ny < 0 || static_cast<uint32_t>(ny) >= current_map_.info.height) {
         continue;
       }
 
       int neighbor_index = ny * current_map_.info.width + nx;
-      if (current_map_.data[neighbor_index] > 50) {  // If any nearby cell is an obstacle
-        return false;
+      if (current_map_.data[neighbor_index] >= 75) {  // Count cells very close to obstacles
+        high_cost_count++;
       }
     }
   }
 
-  return true;
+  // If too many nearby cells are high-cost, consider this cell invalid
+  return high_cost_count <= 2;  // Allow some high-cost cells but not too many
 }
 
 double PlannerNode::heuristic(const CellIndex& a, const CellIndex& b) {
-    // Euclidean distance with a small weight to encourage exploration
+    // Base distance using Euclidean distance
     double dx = a.x - b.x;
     double dy = a.y - b.y;
-    return 1.1 * std::sqrt(dx * dx + dy * dy);
+    double base_cost = std::sqrt(dx * dx + dy * dy);
+
+    // Add cost based on cell occupancy to encourage paths through clear areas
+    int cell_index = a.y * current_map_.info.width + a.x;
+    if (cell_index >= 0 && static_cast<size_t>(cell_index) < current_map_.data.size()) {
+        double occupancy_cost = current_map_.data[cell_index] / 25.0;  // Normalize to 0-4 range
+        return base_cost * (1.0 + occupancy_cost);  // Increase cost near obstacles
+    }
+    
+    return base_cost;
 }
 
 std::vector<geometry_msgs::msg::PoseStamped> PlannerNode::smoothPath(
@@ -260,15 +285,41 @@ std::vector<geometry_msgs::msg::PoseStamped> PlannerNode::smoothPath(
 
 std::vector<CellIndex> PlannerNode::getNeighbors(const CellIndex& current) {
     std::vector<CellIndex> neighbors;
-    // 8-connected grid
-    const int dx[] = {-1, -1, -1,  0,  0,  1, 1, 1};
-    const int dy[] = {-1,  0,  1, -1,  1, -1, 0, 1};
+    
+    // Define movements: straight first, then diagonals
+    const int dx[] = {0, 1, 0, -1, 1, 1, -1, -1};
+    const int dy[] = {1, 0, -1, 0, 1, -1, -1, 1};
+    const bool is_diagonal[] = {false, false, false, false, true, true, true, true};
 
     for (int i = 0; i < 8; ++i) {
         CellIndex neighbor(current.x + dx[i], current.y + dy[i]);
-        if (isValidCell(neighbor)) {
-            neighbors.push_back(neighbor);
+        
+        // Skip if neighbor cell is invalid
+        if (!isValidCell(neighbor)) {
+            continue;
         }
+
+        // For diagonal movements, check both adjacent cells
+        if (is_diagonal[i]) {
+            CellIndex corner1(current.x + dx[i], current.y);
+            CellIndex corner2(current.x, current.y + dy[i]);
+            
+            // Skip diagonal if either adjacent cell is invalid
+            if (!isValidCell(corner1) || !isValidCell(corner2)) {
+                continue;
+            }
+
+            // Get costs of corner cells
+            int corner1_idx = corner1.y * current_map_.info.width + corner1.x;
+            int corner2_idx = corner2.y * current_map_.info.width + corner2.x;
+            
+            // Skip diagonal if either corner has high cost
+            if (current_map_.data[corner1_idx] > 40 || current_map_.data[corner2_idx] > 40) {
+                continue;
+            }
+        }
+
+        neighbors.push_back(neighbor);
     }
     return neighbors;
 }
