@@ -25,29 +25,54 @@ CostmapNode::CostmapNode() : Node("costmap"), costmap_(robot::CostmapCore(this->
 //}
 void CostmapNode::inflateCostmap() {
   int inflation_cells = static_cast<int>(inflation_radius_ / resolution_);
+  
+  // Pre-compute distance lookup table
+  std::vector<std::vector<int>> distance_costs(inflation_cells + 1, std::vector<int>(inflation_cells + 1));
+  for (int dx = 0; dx <= inflation_cells; dx++) {
+    for (int dy = 0; dy <= inflation_cells; dy++) {
+      double distance = std::sqrt(dx * dx + dy * dy) * resolution_;
+      if (distance <= inflation_radius_) {
+        int cost = static_cast<int>(max_cost_ * (1.0 - distance / inflation_radius_));
+        distance_costs[dx][dy] = (cost > 10) ? cost : 0;
+      }
+    }
+  }
 
+  // Create temporary grid for inflation
+  std::vector<std::vector<int>> inflated_grid(GRID_SIZE_, std::vector<int>(GRID_SIZE_, 0));
+
+  // Find obstacles and apply inflation
   for (int x = 0; x < GRID_SIZE_; x++) {
     for (int y = 0; y < GRID_SIZE_; y++) {
       if (grid_[x][y] == 100) {  // If cell is an obstacle
-        // Inflate around obstacle
-        for (int dx = -inflation_cells; dx <= inflation_cells; dx++) {
-          for (int dy = -inflation_cells; dy <= inflation_cells; dy++) {
-            int new_x = x + dx;
-            int new_y = y + dy;
-
-            if (new_x >= 0 && new_x < GRID_SIZE_ && new_y >= 0 && new_y < GRID_SIZE_) {
-              double distance = std::sqrt(dx * dx + dy * dy) * resolution_;
-
-              if (distance <= inflation_radius_) {
-                int cost = static_cast<int>(max_cost_ * (1.0 - distance / inflation_radius_));
-                if (cost > 10) {
-                  grid_[new_x][new_y] = std::max(grid_[new_x][new_y], cost);
+        inflated_grid[x][y] = 100;  // Keep original obstacle
+        
+        // Inflate around obstacle using lookup table
+        for (int dx = 0; dx <= inflation_cells; dx++) {
+          for (int dy = 0; dy <= inflation_cells; dy++) {
+            int cost = distance_costs[dx][dy];
+            if (cost > 0) {
+              // Apply cost to all quadrants
+              for (int sx = -1; sx <= 1; sx += 2) {
+                for (int sy = -1; sy <= 1; sy += 2) {
+                  int new_x = x + dx * sx;
+                  int new_y = y + dy * sy;
+                  if (new_x >= 0 && new_x < GRID_SIZE_ && new_y >= 0 && new_y < GRID_SIZE_) {
+                    inflated_grid[new_x][new_y] = std::max(inflated_grid[new_x][new_y], cost);
+                  }
                 }
               }
             }
           }
         }
       }
+    }
+  }
+
+  // Copy inflated values back to main grid
+  for (int x = 0; x < GRID_SIZE_; x++) {
+    for (int y = 0; y < GRID_SIZE_; y++) {
+      grid_[x][y] = std::max(grid_[x][y], inflated_grid[x][y]);
     }
   }
 }

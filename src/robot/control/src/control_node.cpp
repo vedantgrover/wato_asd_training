@@ -43,15 +43,39 @@ std::optional<geometry_msgs::msg::PoseStamped> ControlNode::findLookaheadDistanc
 
     auto robot_pose = robot_odom_->pose.pose;
     
-    // Find the first point that's at least lookahead_distance_ away
-    for (const auto& pose : current_path_->poses) {
-        double distance = computeDistance(robot_pose.position, pose.pose.position);
-        if (distance >= lookahead_distance_) {
-            return pose;
+    // Calculate current robot speed
+    double current_speed = std::sqrt(
+        std::pow(robot_odom_->twist.twist.linear.x, 2) +
+        std::pow(robot_odom_->twist.twist.linear.y, 2)
+    );
+    
+    // Adjust lookahead distance based on speed
+    double dynamic_lookahead = std::max(
+        0.5,  // minimum lookahead
+        std::min(2.0,  // maximum lookahead
+                0.5 + current_speed * 0.5)  // speed-based scaling
+    );
+
+    // Find closest point on path
+    size_t closest_idx = 0;
+    double min_distance = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < current_path_->poses.size(); ++i) {
+        double distance = computeDistance(robot_pose.position, current_path_->poses[i].pose.position);
+        if (distance < min_distance) {
+            min_distance = distance;
+            closest_idx = i;
         }
     }
 
-    // If we're close to the final goal, return the last point
+    // Look ahead from closest point
+    for (size_t i = closest_idx; i < current_path_->poses.size(); ++i) {
+        double distance = computeDistance(robot_pose.position, current_path_->poses[i].pose.position);
+        if (distance >= dynamic_lookahead) {
+            return current_path_->poses[i];
+        }
+    }
+
+    // If we're close to the final goal, check if we should stop
     double distance_to_final = computeDistance(
         robot_pose.position,
         current_path_->poses.back().pose.position);
@@ -74,9 +98,15 @@ geometry_msgs::msg::Twist ControlNode::computeVelocity(
         target.pose.position);
     
     // Extract current robot yaw from quaternion
-    double robot_yaw = 2 * std::atan2(
+    tf2::Quaternion q(
+        robot_odom_->pose.pose.orientation.x,
+        robot_odom_->pose.pose.orientation.y,
         robot_odom_->pose.pose.orientation.z,
-        robot_odom_->pose.pose.orientation.w);
+        robot_odom_->pose.pose.orientation.w
+    );
+    tf2::Matrix3x3 m(q);
+    double roll, pitch, robot_yaw;
+    m.getRPY(roll, pitch, robot_yaw);
     
     // Calculate angular difference
     double yaw_error = target_yaw - robot_yaw;
@@ -85,9 +115,25 @@ geometry_msgs::msg::Twist ControlNode::computeVelocity(
     while (yaw_error > M_PI) yaw_error -= 2 * M_PI;
     while (yaw_error < -M_PI) yaw_error += 2 * M_PI;
     
-    // Set linear and angular velocities
-    cmd_vel.linear.x = linear_speed_;
-    cmd_vel.angular.z = 2.0 * yaw_error;  // Simple P controller for angular velocity
+    // Calculate distance to target
+    double distance = computeDistance(robot_odom_->pose.pose.position, target.pose.position);
+    
+    // Adjust linear speed based on angular error and distance to target
+    double angular_factor = std::cos(yaw_error);  // Reduce speed when turning
+    double distance_factor = std::min(distance / lookahead_distance_, 1.0);  // Slow down when approaching target
+    
+    // Compute velocities with improved control
+    cmd_vel.linear.x = linear_speed_ * angular_factor * distance_factor;
+    
+    // PD controller for angular velocity
+    static double prev_error = 0.0;
+    double error_diff = (yaw_error - prev_error) / 0.1;  // dt = 0.1s (control loop rate)
+    cmd_vel.angular.z = 1.5 * yaw_error + 0.5 * error_diff;  // kp = 1.5, kd = 0.5
+    prev_error = yaw_error;
+    
+    // Limit maximum angular velocity
+    const double max_angular_vel = 1.5;  // radians per second
+    cmd_vel.angular.z = std::clamp(cmd_vel.angular.z, -max_angular_vel, max_angular_vel);
     
     return cmd_vel;
 }

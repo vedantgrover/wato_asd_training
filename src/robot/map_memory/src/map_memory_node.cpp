@@ -46,11 +46,7 @@ void MapMemoryNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
 void MapMemoryNode::updateMap() {
   if (should_update_map_ && costmap_updated_) {
     RCLCPP_INFO(this->get_logger(), "Updating map");
-    for (int i = 0; i < 300 * 300; i++) {
-      for (int j = 0; j < 300 * 300; j++) {
-        global_map_.data[i] = 0;
-      }
-    }
+    // Don't clear the entire map, let the decay handle old obstacles
     integrateCostMap();
     map_pub_->publish(global_map_);
     should_update_map_ = false;
@@ -101,15 +97,23 @@ void MapMemoryNode::integrateCostMap() {
         for (int j = 0; j < GRID_SIZE_; j++) {
             int index = GRID_SIZE_ * i + j;
             
-            if (global_map_.data[index] == 0 && latest_costmap_.data[index] > 0) {
+            // Update with new obstacle information
+            if (latest_costmap_.data[index] > 50) {  // Only consider significant obstacles
                 global_map_.data[index] = latest_costmap_.data[index];
-            } else if (global_map_.data[index] < latest_costmap_.data[index] && 
-                      latest_costmap_.data[index] > 50) {
+            } else if (latest_costmap_.data[index] > 0 && global_map_.data[index] == 0) {
+                // Add new lower-cost areas only if cell is empty
                 global_map_.data[index] = latest_costmap_.data[index];
             }
             
-            // Apply decay factor
-            global_map_.data[index] *= 0.92;
+            // Apply gentler decay factor only to non-obstacle cells
+            if (global_map_.data[index] > 0 && global_map_.data[index] < 90) {
+                global_map_.data[index] *= 0.98;  // Slower decay for better persistence
+                
+                // Clear cells that have decayed significantly
+                if (global_map_.data[index] < 5) {
+                    global_map_.data[index] = 0;
+                }
+            }
         }
     }
 }

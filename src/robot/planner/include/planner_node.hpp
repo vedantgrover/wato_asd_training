@@ -12,6 +12,9 @@
 
 #include "planner_core.hpp"
 #include "planner_types.hpp"
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 class PlannerNode : public rclcpp::Node {
   public:
@@ -49,6 +52,7 @@ class PlannerNode : public rclcpp::Node {
     double heuristic(const CellIndex& a, const CellIndex& b);
     std::vector<CellIndex> getNeighbors(const CellIndex& current);
     std::vector<geometry_msgs::msg::PoseStamped> reconstructPath(const std::unordered_map<CellIndex, CellIndex, CellIndexHash>& came_from, const CellIndex& current);
+    std::vector<geometry_msgs::msg::PoseStamped> smoothPath(const std::vector<geometry_msgs::msg::PoseStamped>& original_path);
 };
 
 #endif 

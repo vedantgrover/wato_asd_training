@@ -51,7 +51,30 @@ void PlannerNode::timerCallback() {
 bool PlannerNode::goalReached() {
   double dx = goal_.point.x - robot_pose_.position.x;
   double dy = goal_.point.y - robot_pose_.position.y;
-  return (std::sqrt(dx * dx + dy * dy) < 0.5);
+  double distance = std::sqrt(dx * dx + dy * dy);
+  
+  // Get robot's current orientation
+  tf2::Quaternion q(
+    robot_pose_.orientation.x,
+    robot_pose_.orientation.y,
+    robot_pose_.orientation.z,
+    robot_pose_.orientation.w
+  );
+  tf2::Matrix3x3 m(q);
+  double roll, pitch, yaw;
+  m.getRPY(roll, pitch, yaw);
+  
+  // Calculate angle to goal
+  double angle_to_goal = std::atan2(dy, dx);
+  double angle_diff = std::abs(angle_to_goal - yaw);
+  
+  // Normalize angle difference to [0, π]
+  while (angle_diff > M_PI) {
+    angle_diff = std::abs(angle_diff - 2 * M_PI);
+  }
+  
+  // Consider goal reached if robot is close enough and facing roughly the right direction
+  return (distance < 0.3 && angle_diff < M_PI/4);
 }
 
 void PlannerNode::planPath() {
@@ -114,17 +137,125 @@ std::pair<double, double> PlannerNode::gridToWorld(int x, int y) {
 }
 
 bool PlannerNode::isValidCell(const CellIndex& idx) {
+  // Check bounds
   if (idx.x < 0 || idx.x >= current_map_.info.width || idx.y < 0 || idx.y >= current_map_.info.height) {
     return false;
   }
 
+  // Get cell cost
   int cell_index = idx.y * current_map_.info.width + idx.x;
-  return current_map_.data[cell_index] < 30;
+  int cell_cost = current_map_.data[cell_index];
+
+  // More conservative threshold (was 30)
+  if (cell_cost > 20) {
+    return false;
+  }
+
+  // Check surrounding cells for safety margin
+  const int safety_radius = 2;  // Check 2 cells in each direction
+  for (int dx = -safety_radius; dx <= safety_radius; dx++) {
+    for (int dy = -safety_radius; dy <= safety_radius; dy++) {
+      int nx = idx.x + dx;
+      int ny = idx.y + dy;
+      
+      // Skip if out of bounds
+      if (nx < 0 || nx >= current_map_.info.width || ny < 0 || ny >= current_map_.info.height) {
+        continue;
+      }
+
+      int neighbor_index = ny * current_map_.info.width + nx;
+      if (current_map_.data[neighbor_index] > 50) {  // If any nearby cell is an obstacle
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 double PlannerNode::heuristic(const CellIndex& a, const CellIndex& b) {
-    // Manhattan distance
-    return std::abs(a.x - b.x) + std::abs(a.y - b.y);
+    // Euclidean distance with a small weight to encourage exploration
+    double dx = a.x - b.x;
+    double dy = a.y - b.y;
+    return 1.1 * std::sqrt(dx * dx + dy * dy);
+}
+
+std::vector<geometry_msgs::msg::PoseStamped> PlannerNode::smoothPath(
+    const std::vector<geometry_msgs::msg::PoseStamped>& original_path) {
+    if (original_path.size() < 3) return original_path;
+
+    std::vector<geometry_msgs::msg::PoseStamped> smoothed_path;
+    smoothed_path.push_back(original_path.front());
+
+    // Bezier curve smoothing
+    for (size_t i = 1; i < original_path.size() - 1; i++) {
+        const auto& prev = original_path[i-1].pose.position;
+        const auto& curr = original_path[i].pose.position;
+        const auto& next = original_path[i+1].pose.position;
+
+        // Create more intermediate points for smoother curves
+        int num_points = 8;  // Increased from 5 to 8 for smoother curves
+        for (int j = 0; j < num_points; j++) {
+            double t = static_cast<double>(j) / num_points;
+            double mt = 1.0 - t;
+            
+            geometry_msgs::msg::PoseStamped pose;
+            pose.header = original_path[i].header;
+            
+            // Quadratic Bezier curve
+            pose.pose.position.x = mt*mt*prev.x + 2*mt*t*curr.x + t*t*next.x;
+            pose.pose.position.y = mt*mt*prev.y + 2*mt*t*curr.y + t*t*next.y;
+            pose.pose.position.z = 0.0;
+
+            // Calculate orientation based on path direction
+            double path_dx = 2*mt*(-prev.x + curr.x) + 2*t*(curr.x - next.x);
+            double path_dy = 2*mt*(-prev.y + curr.y) + 2*t*(curr.y - next.y);
+            double yaw = std::atan2(path_dy, path_dx);
+
+            tf2::Quaternion q;
+            q.setRPY(0, 0, yaw);
+            pose.pose.orientation.x = q.x();
+            pose.pose.orientation.y = q.y();
+            pose.pose.orientation.z = q.z();
+            pose.pose.orientation.w = q.w();
+
+            // Check if the interpolated point and its surroundings are safe
+            CellIndex point = worldToGrid(pose.pose.position.x, pose.pose.position.y);
+            
+            // Skip this interpolated point if it's too close to obstacles
+            if (!isValidCell(point)) {
+                continue;
+            }
+
+            // Check points between current and previous point for safety
+            if (!smoothed_path.empty()) {
+                const auto& prev_pose = smoothed_path.back();
+                bool path_safe = true;
+                
+                // Check several points along the line between prev and current
+                for (int k = 1; k <= 3; k++) {
+                    double ratio = static_cast<double>(k) / 4.0;
+                    double check_x = prev_pose.pose.position.x * (1 - ratio) + pose.pose.position.x * ratio;
+                    double check_y = prev_pose.pose.position.y * (1 - ratio) + pose.pose.position.y * ratio;
+                    
+                    CellIndex check_point = worldToGrid(check_x, check_y);
+                    if (!isValidCell(check_point)) {
+                        path_safe = false;
+                        break;
+                    }
+                }
+                
+                if (!path_safe) {
+                    continue;
+                }
+            }
+
+            smoothed_path.push_back(pose);
+        }
+    }
+
+    smoothed_path.push_back(original_path.back());
+    return smoothed_path;
 }
 
 std::vector<CellIndex> PlannerNode::getNeighbors(const CellIndex& current) {
@@ -156,8 +287,8 @@ std::vector<geometry_msgs::msg::PoseStamped> PlannerNode::reconstructPath(
     }
     path_indices.push_back(current_cell);  // Add start position
 
-    // Reverse path and convert to PoseStamped messages
-    std::vector<geometry_msgs::msg::PoseStamped> path;
+    // Reverse path and convert to PoseStamped messages with proper orientations
+    std::vector<geometry_msgs::msg::PoseStamped> raw_path;
     for (auto it = path_indices.rbegin(); it != path_indices.rend(); ++it) {
         geometry_msgs::msg::PoseStamped pose;
         pose.header.frame_id = "sim_world";
@@ -169,16 +300,45 @@ std::vector<geometry_msgs::msg::PoseStamped> PlannerNode::reconstructPath(
         pose.pose.position.y = world_coords.second;
         pose.pose.position.z = 0.0;
 
-        // Set orientation (you might want to compute proper orientation based on path direction)
-        pose.pose.orientation.w = 1.0;
-        pose.pose.orientation.x = 0.0;
-        pose.pose.orientation.y = 0.0;
-        pose.pose.orientation.z = 0.0;
+        // Calculate orientation based on path direction
+        if (it != path_indices.rbegin() && std::next(it) != path_indices.rend()) {
+            // For middle points, use previous and next points to determine orientation
+            auto prev_coords = gridToWorld(std::prev(it)->x, std::prev(it)->y);
+            auto next_coords = gridToWorld(std::next(it)->x, std::next(it)->y);
+            
+            double dx = next_coords.first - prev_coords.first;
+            double dy = next_coords.second - prev_coords.second;
+            double yaw = std::atan2(dy, dx);
 
-        path.push_back(pose);
+            tf2::Quaternion q;
+            q.setRPY(0, 0, yaw);
+            pose.pose.orientation.x = q.x();
+            pose.pose.orientation.y = q.y();
+            pose.pose.orientation.z = q.z();
+            pose.pose.orientation.w = q.w();
+        } else {
+            // For start/end points, use adjacent point
+            auto adjacent = (it == path_indices.rbegin()) ?
+                          gridToWorld(std::next(it)->x, std::next(it)->y) :
+                          gridToWorld(std::prev(it)->x, std::prev(it)->y);
+            
+            double dx = adjacent.first - world_coords.first;
+            double dy = adjacent.second - world_coords.second;
+            double yaw = std::atan2(dy, dx);
+
+            tf2::Quaternion q;
+            q.setRPY(0, 0, yaw);
+            pose.pose.orientation.x = q.x();
+            pose.pose.orientation.y = q.y();
+            pose.pose.orientation.z = q.z();
+            pose.pose.orientation.w = q.w();
+        }
+
+        raw_path.push_back(pose);
     }
 
-    return path;
+    // Apply path smoothing
+    return smoothPath(raw_path);
 }
 
 int main(int argc, char ** argv)
