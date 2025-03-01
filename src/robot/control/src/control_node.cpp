@@ -117,23 +117,45 @@ geometry_msgs::msg::Twist ControlNode::computeVelocity(
     
     // Calculate distance to target
     double distance = computeDistance(robot_odom_->pose.pose.position, target.pose.position);
-    
-    // Adjust linear speed based on angular error and distance to target
+
+    // Check if we're at the final goal point
+    bool is_final_point = (target.pose.position.x == current_path_->poses.back().pose.position.x &&
+                          target.pose.position.y == current_path_->poses.back().pose.position.y);
+
+    // If we're very close to the goal and it's the final point, stop completely
+    if (is_final_point && distance < goal_tolerance_ * 1.5) {
+        // If we're well-aligned, stop completely
+        if (std::abs(yaw_error) < 0.1) {  // About 5.7 degrees
+            cmd_vel.linear.x = 0.0;
+            cmd_vel.angular.z = 0.0;
+            return cmd_vel;
+        }
+        // If not well-aligned, only rotate (no linear motion)
+        cmd_vel.linear.x = 0.0;
+        cmd_vel.angular.z = std::clamp(yaw_error, -0.5, 0.5);  // Gentle rotation
+        return cmd_vel;
+    }
+
+    // Normal path following behavior
     double angular_factor = std::cos(yaw_error);  // Reduce speed when turning
     double distance_factor = std::min(distance / lookahead_distance_, 1.0);  // Slow down when approaching target
     
     // Compute velocities with improved control
     cmd_vel.linear.x = linear_speed_ * angular_factor * distance_factor;
     
-    // PD controller for angular velocity
+    // PD controller for angular velocity with dead zone
     static double prev_error = 0.0;
     double error_diff = (yaw_error - prev_error) / 0.1;  // dt = 0.1s (control loop rate)
-    cmd_vel.angular.z = 1.5 * yaw_error + 0.5 * error_diff;  // kp = 1.5, kd = 0.5
-    prev_error = yaw_error;
     
-    // Limit maximum angular velocity
-    const double max_angular_vel = 1.5;  // radians per second
-    cmd_vel.angular.z = std::clamp(cmd_vel.angular.z, -max_angular_vel, max_angular_vel);
+    // Add dead zone for small angular errors
+    if (std::abs(yaw_error) < 0.05) {  // About 2.8 degrees
+        cmd_vel.angular.z = 0.0;
+    } else {
+        cmd_vel.angular.z = 1.5 * yaw_error + 0.5 * error_diff;  // kp = 1.5, kd = 0.5
+        // Limit maximum angular velocity
+        cmd_vel.angular.z = std::clamp(cmd_vel.angular.z, -1.5, 1.5);
+    }
+    prev_error = yaw_error;
     
     return cmd_vel;
 }
